@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zebra Crossing Monitor</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #2c3e50;
+            --secondary-color: #3498db;
+            --accent-color: #e74c3c;
+            --background-color: #ecf0f1;
+            --card-background: #ffffff;
+        }
+        
+        body {
+            background-color: var(--background-color);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        .main-container {
+            max-width: 1400px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+        }
+        
+        .header {
+            background: var(--primary-color);
+            color: white;
+            padding: 1rem 0;
+            margin-bottom: 2rem;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        .video-container {
+            background-color: #000;
+            border-radius: 15px;
+            overflow: hidden;
+            margin-bottom: 1.5rem;
+            position: relative;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+        
+        .stats-card {
+            background-color: var(--card-background);
+            border-radius: 15px;
+            padding: 1.5rem;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            margin-bottom: 1.5rem;
+            transition: transform 0.3s ease;
+        }
+        
+        .stats-card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .upload-area {
+            border: 3px dashed #bdc3c7;
+            border-radius: 15px;
+            padding: 2.5rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background-color: var(--card-background);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        
+        .upload-area:hover {
+            border-color: var(--secondary-color);
+            background-color: #f8f9fa;
+            transform: translateY(-5px);
+        }
+        
+        .upload-area i {
+            font-size: 4rem;
+            color: var(--secondary-color);
+            margin-bottom: 1.5rem;
+        }
+        
+        #videoFeed {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        
+        .crossing-history {
+            max-height: 400px;
+            overflow-y: auto;
+            padding-right: 10px;
+        }
+        
+        .crossing-history::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        .crossing-history::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+        
+        .crossing-history::-webkit-scrollbar-thumb {
+            background: var(--secondary-color);
+            border-radius: 4px;
+        }
+        
+        .progress-container {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            display: none;
+            border-radius: 0 0 15px 15px;
+        }
+        
+        .progress {
+            height: 25px;
+            margin-bottom: 0;
+            border-radius: 12px;
+            background-color: rgba(255, 255, 255, 0.2);
+        }
+        
+        .progress-bar {
+            background-color: var(--secondary-color);
+        }
+        
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 1.5rem;
+            display: none;
+            border-radius: 15px;
+        }
+        
+        .performance-stats {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            backdrop-filter: blur(5px);
+        }
+        
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: var(--secondary-color);
+        }
+        
+        .stat-label {
+            color: #7f8c8d;
+            font-size: 1.1rem;
+        }
+        
+        .btn-custom {
+            background-color: var(--secondary-color);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 25px;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-custom:hover {
+            background-color: #2980b9;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+        
+        .crossing-item {
+            background-color: #f8f9fa;
+            border-radius: 10px;
+            padding: 10px;
+            margin-bottom: 10px;
+            border-left: 4px solid var(--secondary-color);
+        }
+        
+        .crossing-item:hover {
+            background-color: #e9ecef;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="main-container">
+            <h1 class="text-center mb-0">
+                <i class="fas fa-walking"></i> Zebra Crossing Monitor
+            </h1>
+        </div>
+    </div>
+    
+    <div class="main-container">
+        <div class="row">
+            <div class="col-md-8">
+                <div class="video-container">
+                    <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Video Feed">
+                    <div class="loading-overlay" id="loadingOverlay">
+                        <div class="text-center">
+                            <div class="spinner-border text-light mb-3" role="status" style="width: 3rem; height: 3rem;"></div>
+                            <div class="h4">Processing Video...</div>
+                        </div>
+                    </div>
+                    <div class="progress-container" id="progressContainer">
+                        <div class="progress">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                                 role="progressbar" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <div class="performance-stats" id="performanceStats">
+                        <i class="fas fa-tachometer-alt"></i> FPS: <span id="fps">0</span> | 
+                        <i class="fas fa-clock"></i> Processing: <span id="processingTime">0</span>ms
+                    </div>
+                </div>
+                
+                <div class="upload-area" id="uploadArea">
+                    <i class="fas fa-cloud-upload-alt"></i>
+                    <h3 class="mb-3">Drag & Drop Video File Here</h3>
+                    <p class="text-muted mb-4">or</p>
+                    <input type="file" id="videoInput" accept="video/*" style="display: none;">
+                    <button class="btn btn-custom" onclick="document.getElementById('videoInput').click()">
+                        <i class="fas fa-file-video"></i> Choose File
+                    </button>
+                </div>
+            </div>
+            
+            <div class="col-md-4">
+                <div class="stats-card">
+                    <h3 class="mb-4"><i class="fas fa-chart-bar"></i> Statistics</h3>
+                    <div class="d-flex justify-content-between align-items-center mb-4">
+                        <div>
+                            <div class="stat-label">Total Crossings</div>
+                            <div class="stat-value" id="totalCrossings">0</div>
+                        </div>
+                        <i class="fas fa-users fa-3x text-primary"></i>
+                    </div>
+                    <div class="mb-4">
+                        <div class="stat-label">Processing Progress</div>
+                        <div class="progress">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                                 role="progressbar" id="processingProgress" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <div class="mb-4">
+                        <div class="stat-label">Zebra Crossing Status</div>
+                        <div class="alert" id="zebraStatus" role="alert">
+                            <i class="fas fa-info-circle"></i> Not Detected
+                        </div>
+                    </div>
+                    <button class="btn btn-custom w-100" onclick="downloadData()">
+                        <i class="fas fa-download"></i> Download Data
+                    </button>
+                </div>
+                
+                <div class="stats-card">
+                    <h3 class="mb-4"><i class="fas fa-history"></i> Crossing History</h3>
+                    <div class="crossing-history" id="crossingHistory">
+                        <!-- History items will be added here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let frameCount = 0;
+        let lastTime = performance.now();
+        let fps = 0;
+        let processingTime = 0;
+
+        // Handle file upload
+        const uploadArea = document.getElementById('uploadArea');
+        const videoInput = document.getElementById('videoInput');
+        const loadingOverlay = document.getElementById('loadingOverlay');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.querySelector('.progress-bar');
+        const performanceStats = document.getElementById('performanceStats');
+
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            const secondaryColor = getComputedStyle(document.documentElement).getPropertyValue('--secondary-color').trim();
+            uploadArea.style.borderColor = secondaryColor;
+            uploadArea.style.transform = 'scale(1.02)';
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.style.borderColor = '#bdc3c7';
+            uploadArea.style.transform = 'scale(1)';
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.style.borderColor = '#bdc3c7';
+            uploadArea.style.transform = 'scale(1)';
+            const file = e.dataTransfer.files[0];
+            if (file && file.type.startsWith('video/')) {
+                uploadVideo(file);
+            }
+        });
+
+        videoInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                uploadVideo(file);
+            }
+        });
+
+        function uploadVideo(file) {
+            const formData = new FormData();
+            formData.append('video', file);
+
+            loadingOverlay.style.display = 'flex';
+            progressContainer.style.display = 'block';
+            progressBar.style.width = '0%';
+
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.message) {
+                    let progress = 0;
+                    const interval = setInterval(() => {
+                        progress += 5;
+                        progressBar.style.width = `${progress}%`;
+                        if (progress >= 100) {
+                            clearInterval(interval);
+                            setTimeout(() => {
+                                loadingOverlay.style.display = 'none';
+                                progressContainer.style.display = 'none';
+                                location.reload();
+                            }, 500);
+                        }
+                    }, 100);
+                } else {
+                    alert('Error uploading file');
+                    loadingOverlay.style.display = 'none';
+                    progressContainer.style.display = 'none';
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error uploading file');
+                loadingOverlay.style.display = 'none';
+                progressContainer.style.display = 'none';
+            });
+        }
+
+        function updateStats() {
+            fetch('/get_stats')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('totalCrossings').textContent = data.total_crossings;
+                    document.getElementById('processingProgress').style.width = `${data.progress}%`;
+                    
+                    const zebraStatus = document.getElementById('zebraStatus');
+                    if (data.zebra_crossing_detected) {
+                        zebraStatus.className = 'alert alert-success';
+                        zebraStatus.innerHTML = '<i class="fas fa-check-circle"></i> Detected';
+                    } else {
+                        zebraStatus.className = 'alert alert-warning';
+                        zebraStatus.innerHTML = '<i class="fas fa-info-circle"></i> Not Detected';
+                    }
+                    
+                    const historyContainer = document.getElementById('crossingHistory');
+                    historyContainer.innerHTML = '';
+                    
+                    data.crossing_history.forEach(crossing => {
+                        const direction = crossing.direction === 'up' ? '↑' : '↓';
+                        const item = document.createElement('div');
+                        item.className = 'crossing-item';
+                        item.innerHTML = `
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <strong>${crossing.timestamp}</strong>
+                                    <div class="text-muted">Direction: ${direction}</div>
+                                </div>
+                                <i class="fas fa-walking fa-lg text-primary"></i>
+                            </div>
+                        `;
+                        historyContainer.appendChild(item);
+                    });
+                });
+        }
+
+        function updatePerformanceStats() {
+            frameCount++;
+            const currentTime = performance.now();
+            const elapsed = currentTime - lastTime;
+            
+            if (elapsed >= 1000) {
+                fps = Math.round((frameCount * 1000) / elapsed);
+                frameCount = 0;
+                lastTime = currentTime;
+                
+                document.getElementById('fps').textContent = fps;
+                document.getElementById('processingTime').textContent = processingTime;
+            }
+        }
+
+        setInterval(updateStats, 2000);
+        setInterval(updatePerformanceStats, 100);
+
+        function downloadData() {
+            fetch('/download_data')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.filename) {
+                        window.location.href = `/${data.filename}`;
+                    }
+                });
+        }
+    </script>
+</body>
+</html> 
