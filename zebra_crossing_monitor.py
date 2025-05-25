@@ -5,10 +5,11 @@ import time
 import json
 from datetime import datetime
 import os
+from collections import deque
 
 class ZebraCrossingMonitor:
     def __init__(self):
-        self.model = YOLO('yolov8m.pt')
+        self.model = YOLO('yolov8x.pt')
         self.roi_points = None
         self.crossing_line = None
         self.total_crossings = 0
@@ -18,13 +19,14 @@ class ZebraCrossingMonitor:
         self.pedestrian_directions = {}
         self.last_detection_time = {}
         self.frame_count = 0
-        self.process_every_n_frames = 2
+        self.process_every_n_frames = 1
         self.last_processed_frame = None
         self.processing_time = 0
         self.progress = 0
         self.total_frames = 0
         self.current_frame = 0
         self.zebra_crossing_detected = False
+        self.zebra_detection_history = deque(maxlen=30)
         self.colors = {
             'roi': (0, 255, 0),
             'crossing_line': (0, 0, 255),
@@ -36,19 +38,25 @@ class ZebraCrossingMonitor:
     def set_roi(self, frame):
         height, width = frame.shape[:2]
         self.roi_points = np.array([
-            [width * 0.05, height * 0.1],
-            [width * 0.95, height * 0.1],
-            [width * 0.95, height * 0.98],
-            [width * 0.05, height * 0.98]
+            [width * 0.1, height * 0.2],
+            [width * 0.9, height * 0.2],
+            [width * 0.9, height * 0.9],
+            [width * 0.1, height * 0.9]
         ], np.int32)
         self.crossing_line = int(height * 0.6)
         
     def detect_pedestrians(self, frame):
-        scale_percent = 50
+        scale_percent = 75
         width = int(frame.shape[1] * scale_percent / 100)
         height = int(frame.shape[0] * scale_percent / 100)
         resized_frame = cv2.resize(frame, (width, height))
-        results = self.model(resized_frame, classes=0, conf=0.3, iou=0.5)
+        
+        results = self.model(resized_frame, 
+                           classes=0,
+                           conf=0.45,
+                           iou=0.5,
+                           verbose=False)
+        
         boxes = results[0].boxes.data.cpu().numpy()
         if len(boxes) > 0:
             boxes[:, :4] *= (100 / scale_percent)
@@ -58,39 +66,55 @@ class ZebraCrossingMonitor:
         x1, y1, x2, y2 = bbox[:4]
         center_x = (x1 + x2) / 2
         center_y = (y1 + y2) / 2
+        
         mask = np.zeros((self.frame_height, self.frame_width), dtype=np.uint8)
         cv2.fillPoly(mask, [self.roi_points], 255)
-        return mask[int(center_y), int(center_x)] == 255
+        
+        feet_y = y2
+        return (mask[int(center_y), int(center_x)] == 255 and 
+                mask[int(feet_y), int(center_x)] == 255)
         
     def calculate_direction(self, positions):
-        if len(positions) < 2:
+        if len(positions) < 3:
             return None
-        y_movement = positions[-1] - positions[0]
-        if abs(y_movement) < 10:
+            
+        x = np.arange(len(positions))
+        y = np.array(positions)
+        slope = np.polyfit(x, y, 1)[0]
+        
+        if abs(slope) < 0.5:
             return None
-        return 'up' if y_movement < 0 else 'down'
+            
+        return 'up' if slope < 0 else 'down'
         
     def is_crossing(self, bbox, ped_id):
         if not self.is_in_zebra_crossing(bbox):
             return False
+            
         x1, y1, x2, y2 = bbox[:4]
         center_y = (y1 + y2) / 2
-        buffer = 40
+        buffer = 30
+        
         if ped_id not in self.pedestrian_positions:
             self.pedestrian_positions[ped_id] = []
             self.pedestrian_directions[ped_id] = None
+            
         self.pedestrian_positions[ped_id].append(center_y)
-        if len(self.pedestrian_positions[ped_id]) > 10:
-            self.pedestrian_positions[ped_id] = self.pedestrian_positions[ped_id][-10:]
+        
+        if len(self.pedestrian_positions[ped_id]) > 20:
+            self.pedestrian_positions[ped_id] = self.pedestrian_positions[ped_id][-20:]
+            
         self.pedestrian_directions[ped_id] = self.calculate_direction(self.pedestrian_positions[ped_id])
-        if len(self.pedestrian_positions[ped_id]) >= 2:
-            prev_y = self.pedestrian_positions[ped_id][-2]
+        
+        if len(self.pedestrian_positions[ped_id]) >= 5:
+            prev_y = self.pedestrian_positions[ped_id][-5]
             curr_y = self.pedestrian_positions[ped_id][-1]
+            
             if self.pedestrian_directions[ped_id] == 'up':
-                if prev_y > (self.crossing_line + buffer) and curr_y < (self.crossing_line - buffer):
+                if prev_y > (self.crossing_line + buffer + 10) and curr_y < (self.crossing_line - buffer - 10):
                     return True
             elif self.pedestrian_directions[ped_id] == 'down':
-                if prev_y < (self.crossing_line - buffer) and curr_y > (self.crossing_line + buffer):
+                if prev_y < (self.crossing_line - buffer - 10) and curr_y > (self.crossing_line + buffer + 10):
                     return True
         return False
     
@@ -113,23 +137,51 @@ class ZebraCrossingMonitor:
     
     def detect_zebra_crossing(self, frame):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        edges = cv2.Canny(gray, 50, 150)
-        lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=100, minLineLength=100, maxLineGap=10)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                     cv2.THRESH_BINARY_INV, 11, 2)
+        edges = cv2.Canny(thresh, 30, 150)
+        kernel = np.ones((3,3), np.uint8)
+        dilated = cv2.dilate(edges, kernel, iterations=1)
+        lines = cv2.HoughLinesP(dilated, 1, np.pi/180,
+                               threshold=80,
+                               minLineLength=80,
+                               maxLineGap=20)
         
         if lines is not None:
             horizontal_lines = []
             for line in lines:
                 x1, y1, x2, y2 = line[0]
-                if abs(y2 - y1) < 20:
+                angle = np.abs(np.arctan2(y2 - y1, x2 - x1) * 180.0 / np.pi)
+                
+                if angle < 30 or angle > 150:
                     horizontal_lines.append(line[0])
             
-            if len(horizontal_lines) >= 4:
-                self.zebra_crossing_detected = True
-                for line in horizontal_lines:
-                    cv2.line(frame, (line[0], line[1]), (line[2], line[3]), self.colors['zebra'], 2)
-                return True
+            if len(horizontal_lines) >= 3:
+                horizontal_lines.sort(key=lambda x: (x[1] + x[3])/2)
+                
+                spacings = []
+                for i in range(len(horizontal_lines)-1):
+                    y1 = (horizontal_lines[i][1] + horizontal_lines[i][3])/2
+                    y2 = (horizontal_lines[i+1][1] + horizontal_lines[i+1][3])/2
+                    spacings.append(abs(y2 - y1))
+                
+                if len(spacings) >= 2:
+                    mean_spacing = np.mean(spacings)
+                    std_spacing = np.std(spacings)
+                    
+                    if std_spacing < mean_spacing * 0.3:
+                        self.zebra_detection_history.append(True)
+                        if sum(self.zebra_detection_history) >= len(self.zebra_detection_history) * 0.7:
+                            self.zebra_crossing_detected = True
+                            for line in horizontal_lines:
+                                cv2.line(frame, (line[0], line[1]), (line[2], line[3]), 
+                                       self.colors['zebra'], 2)
+                            return True
         
-        self.zebra_crossing_detected = False
+        self.zebra_detection_history.append(False)
+        if sum(self.zebra_detection_history) < len(self.zebra_detection_history) * 0.7:
+            self.zebra_crossing_detected = False
         return False
 
     def process_frame(self, frame):
@@ -163,19 +215,22 @@ class ZebraCrossingMonitor:
         
         for ped in pedestrians:
             x1, y1, x2, y2, conf, cls = ped
-            if conf > 0.3:
+            if conf > 0.45:
                 ped_id = f"{int(x1)}_{int(y1)}_{int(x2-x1)}_{int(y2-y1)}"
                 current_pedestrians.add(ped_id)
                 self.last_detection_time[ped_id] = current_time
+                
                 if self.is_in_zebra_crossing(ped):
                     is_crossing = self.is_crossing(ped, ped_id) and ped_id not in self.tracked_pedestrians
                     self.draw_visualization(frame, ped, ped_id, is_crossing)
+                    
                     if is_crossing:
                         self.total_crossings += 1
                         self.crossing_history.append({
                             'timestamp': datetime.now().strftime("%H:%M:%S"),
                             'position': (int(x1), int(y1), int(x2), int(y2)),
-                            'direction': self.pedestrian_directions[ped_id]
+                            'direction': self.pedestrian_directions[ped_id],
+                            'confidence': float(conf)
                         })
                         self.tracked_pedestrians.add(ped_id)
         
@@ -209,68 +264,15 @@ class ZebraCrossingMonitor:
             'crossing_history': self.crossing_history,
             'timestamp': timestamp,
             'settings': {
-                'model': 'yolov8m',
-                'confidence_threshold': 0.3,
+                'model': 'yolov8x',
+                'confidence_threshold': 0.45,
                 'roi_size': {
-                    'width': [0.05, 0.95],
-                    'height': [0.1, 0.98]
+                    'width': [0.1, 0.9],
+                    'height': [0.2, 0.9]
                 }
             }
         }
         filename = f'crossing_data_{timestamp}.json'
         with open(filename, 'w') as f:
             json.dump(data, f, indent=4)
-        print(f"Crossing data saved to {filename}")
-
-def main():
-    video_folder = r"C:\Users\Pradnyesh Tamore\Desktop\videos"
-    print("\nAvailable video files in the folder:")
-    video_files = []
-    for i, file in enumerate(os.listdir(video_folder)):
-        if file.endswith(('.mp4', '.avi', '.mov', '.mkv')):
-            video_files.append(file)
-            print(f"{i+1}. {file}")
-    if not video_files:
-        print("No video files found in the specified folder!")
-        return
-    while True:
-        try:
-            choice = int(input("\nEnter the number of the video file to use (or 0 to quit): "))
-            if choice == 0:
-                return
-            if 1 <= choice <= len(video_files):
-                selected_file = video_files[choice-1]
-                break
-            else:
-                print("Invalid choice! Please try again.")
-        except ValueError:
-            print("Please enter a valid number!")
-    video_path = os.path.join(video_folder, selected_file)
-    print(f"\nAttempting to open video file: {video_path}")
-    if not os.path.exists(video_path):
-        print(f"Error: Video file not found at: {video_path}")
-        print("Please make sure the video file exists and the path is correct")
-        return
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        print(f"Error: Could not open video file: {video_path}")
-        print("Please make sure the video file exists in the specified folder")
-        return
-    monitor = ZebraCrossingMonitor()
-    try:
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                print("End of video file")
-                break
-            processed_frame = monitor.process_frame(frame)
-            cv2.imshow('Zebra Crossing Monitor', processed_frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-    finally:
-        monitor.save_crossing_data()
-        cap.release()
-        cv2.destroyAllWindows()
-
-if __name__ == "__main__":
-    main() 
+        print(f"Crossing data saved to {filename}") 
